@@ -1,0 +1,13 @@
+services:
+  fitness-tracker:
+    build: .
+    container_name: fitness-tracker
+    restart: unless-stopped
+    ports:
+      - "8322:8322"
+    volumes:
+      - "./data:/app/data"
+    environment:
+      FIT_PORT: "8322"
+      FIT_HOST: "0.0.0.0"
+      FIT_DATA_DIR: "/app/data"
