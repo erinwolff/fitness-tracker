@@ -61,6 +61,24 @@ WARMUP = [
     "Cat-cows × 5",
 ]
 
+ACTIVITY_CANONICAL = [
+    "Pickleball", "Bike Ride", "Walking", "Hiking",
+    "Swimming", "Yoga", "Stretching", "Running",
+]
+_ACTIVITY_CANONICAL_LOWER = {c.lower(): c for c in ACTIVITY_CANONICAL}
+
+
+def normalize_activity_name(name):
+    if not name:
+        return name
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        return cleaned
+    canonical = _ACTIVITY_CANONICAL_LOWER.get(cleaned.lower())
+    if canonical:
+        return canonical
+    return cleaned.title()
+
 
 @contextmanager
 def db():
@@ -130,6 +148,14 @@ def init_db():
                 notes TEXT
             )
         """)
+
+        for r in conn.execute("SELECT id, activity_name FROM custom_activities").fetchall():
+            normalized = normalize_activity_name(r["activity_name"])
+            if normalized != r["activity_name"]:
+                conn.execute(
+                    "UPDATE custom_activities SET activity_name = ? WHERE id = ?",
+                    (normalized, r["id"]),
+                )
 
 
 def get_workout_full(conn, workout_id):
@@ -335,12 +361,13 @@ async def list_activities():
 @app.post("/api/activities")
 async def create_activity(entry: ActivityIn):
     entry_id = secrets.token_hex(8)
+    name = normalize_activity_name(entry.activity_name)
     with db() as conn:
         conn.execute(
             "INSERT INTO custom_activities (id, date, activity_name, duration_minutes, notes) VALUES (?, ?, ?, ?, ?)",
-            (entry_id, entry.date, entry.activity_name, entry.duration_minutes, entry.notes),
+            (entry_id, entry.date, name, entry.duration_minutes, entry.notes),
         )
-    return {"id": entry_id, "date": entry.date, "activity_name": entry.activity_name,
+    return {"id": entry_id, "date": entry.date, "activity_name": name,
             "duration_minutes": entry.duration_minutes, "notes": entry.notes}
 
 
@@ -420,6 +447,28 @@ async def exercises_list():
     return [r["exercise_name"] for r in rows]
 
 
+@app.get("/api/trends/activities-list")
+async def activities_list():
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT activity_name FROM custom_activities "
+            "WHERE duration_minutes IS NOT NULL ORDER BY activity_name"
+        ).fetchall()
+    return [r["activity_name"] for r in rows]
+
+
+@app.get("/api/trends/activity")
+async def activity_trend(name: str):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT date, SUM(duration_minutes) as total FROM custom_activities "
+            "WHERE activity_name = ? AND duration_minutes IS NOT NULL "
+            "GROUP BY date ORDER BY date",
+            (name,),
+        ).fetchall()
+    return [{"date": r["date"], "value": r["total"], "label": "min"} for r in rows]
+
+
 @app.get("/api/export")
 async def export_data():
     with db() as conn:
@@ -450,7 +499,7 @@ async def import_data(data: dict):
                 aid = a.get("id") or secrets.token_hex(8)
                 conn.execute(
                     "INSERT OR IGNORE INTO custom_activities (id, date, activity_name, duration_minutes, notes) VALUES (?, ?, ?, ?, ?)",
-                    (aid, a["date"], a["activity_name"], a.get("duration_minutes"), a.get("notes")),
+                    (aid, a["date"], normalize_activity_name(a["activity_name"]), a.get("duration_minutes"), a.get("notes")),
                 )
                 added["custom_activities"] += 1
             except Exception:
